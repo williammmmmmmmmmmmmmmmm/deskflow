@@ -4,6 +4,12 @@ Deskflow is a free and open source keyboard and mouse sharing app. Use the keybo
 
 [Homepage](https://deskflow.org) [Code](https://github.com/deskflow/deskflo)
 
+## Experimental Ubuntu clipboard file transfer
+
+Deskflow can experimentally transfer text, images, and files copied in Nautilus
+between Ubuntu Wayland/X11 computers. See the
+[bilingual Ubuntu clipboard file transfer guide](ubuntu_clipboard_file_transfer.md).
+
 ## Getting help online
 
  - View the [wiki](https://github.com/deskflow/deskflow/wiki) Online resource
