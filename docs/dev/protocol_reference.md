@@ -489,8 +489,14 @@ For platform-specific implementation details, refer to:
 
 - **Clipboard Synchronization**
   - Clipboard grab notifications
-  - Data transfer (@ref kMsgDClipboard - text, images, HTML)
+  - Data transfer (@ref kMsgDClipboard - text, images, HTML, and file clipboard payloads)
   - Streaming for large data (v1.6+)
+
+  Clipboard file copies use appended clipboard format IDs for `text/uri-list`,
+  `x-special/gnome-copied-files`, and a versioned content bundle. The bundle is
+  transported by the existing chunked `DCLP` message; it does not use the
+  deprecated drag-and-drop messages. Older peers ignore the appended format IDs
+  and continue to process text, HTML, and bitmap formats.
 
 - **File Transfer** (v1.5+)
   - Drag-and-drop initiation

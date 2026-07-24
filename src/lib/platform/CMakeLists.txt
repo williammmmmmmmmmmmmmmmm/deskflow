@@ -121,6 +121,10 @@ elseif(UNIX)
       XWindowsClipboardBMPConverter.h
       XWindowsClipboardHTMLConverter.cpp
       XWindowsClipboardHTMLConverter.h
+      XWindowsClipboardMimeConverter.cpp
+      XWindowsClipboardMimeConverter.h
+      XWindowsClipboardPNGConverter.cpp
+      XWindowsClipboardPNGConverter.h
       XWindowsClipboardTextConverter.cpp
       XWindowsClipboardTextConverter.h
       XWindowsClipboardUCS2Converter.cpp

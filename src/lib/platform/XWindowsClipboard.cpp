@@ -13,6 +13,8 @@
 #include "base/Stopwatch.h"
 #include "platform/XWindowsClipboardBMPConverter.h"
 #include "platform/XWindowsClipboardHTMLConverter.h"
+#include "platform/XWindowsClipboardMimeConverter.h"
+#include "platform/XWindowsClipboardPNGConverter.h"
 #include "platform/XWindowsClipboardTextConverter.h"
 #include "platform/XWindowsClipboardUCS2Converter.h"
 #include "platform/XWindowsClipboardUTF8Converter.h"
@@ -62,7 +64,14 @@ XWindowsClipboard::XWindowsClipboard(Display *display, Window window, ClipboardI
   // add converters, most desired first
   m_converters.push_back(new XWindowsClipboardHTMLConverter(m_display, "text/html"));
   m_converters.push_back(new XWindowsClipboardHTMLConverter(m_display, "application/x-moz-nativehtml"));
+  m_converters.push_back(new XWindowsClipboardPNGConverter(m_display));
   m_converters.push_back(new XWindowsClipboardBMPConverter(m_display));
+  m_converters.push_back(new XWindowsClipboardMimeConverter(
+      m_display, "x-special/gnome-copied-files", IClipboard::Format::GnomeCopiedFiles
+  ));
+  m_converters.push_back(
+      new XWindowsClipboardMimeConverter(m_display, "text/uri-list", IClipboard::Format::UriList)
+  );
   m_converters.push_back(new XWindowsClipboardUTF8Converter(m_display, "text/plain;charset=UTF-8", true));
   m_converters.push_back(new XWindowsClipboardUTF8Converter(m_display, "text/plain;charset=utf-8", true));
   m_converters.push_back(new XWindowsClipboardUTF8Converter(m_display, "UTF8_STRING"));

@@ -17,6 +17,7 @@
 #include "deskflow/App.h"
 #include "deskflow/ClientApp.h"
 #include "deskflow/Clipboard.h"
+#include "deskflow/ClipboardFileTransfer.h"
 #include "deskflow/KeyMap.h"
 #include "deskflow/ScreenException.h"
 #include "platform/XDGKeyUtil.h"
@@ -350,8 +351,10 @@ bool XWindowsScreen::setClipboard(ClipboardID id, const IClipboard *clipboard)
   Time timestamp = XWindowsUtil::getCurrentTime(m_display, m_clipboard[id]->getWindow());
 
   if (clipboard != nullptr) {
-    // save clipboard data
-    return Clipboard::copy(m_clipboard[id], clipboard, timestamp);
+    Clipboard localClipboard;
+    if (!deskflow::ClipboardFileTransfer::prepareForLocalClipboard(&localClipboard, clipboard))
+      return false;
+    return Clipboard::copy(m_clipboard[id], &localClipboard, timestamp);
   } else {
     // assert clipboard ownership
     if (!m_clipboard[id]->open(timestamp)) {
@@ -396,6 +399,7 @@ void XWindowsScreen::resetOptions()
 {
   m_xtestIsXineramaUnaware = true;
   m_preserveFocus = false;
+  m_maximumClipboardSize = INT_MAX;
 }
 
 void XWindowsScreen::setOptions(const OptionsList &options)
@@ -411,6 +415,9 @@ void XWindowsScreen::setOptions(const OptionsList &options)
     } else if (options[i] == kOptionScreenPreserveFocus) {
       m_preserveFocus = (options[i + 1] != 0);
       LOG_VERBOSE("preserve focus: %s", m_preserveFocus ? "true" : "false");
+    } else if (options[i] == kOptionClipboardSharingSize) {
+      m_maximumClipboardSize = options[i + 1];
+      LOG_DEBUG("x11 screen received clipboard size limit: %zu KB", m_maximumClipboardSize);
     }
   }
 }
@@ -448,8 +455,13 @@ bool XWindowsScreen::getClipboard(ClipboardID id, IClipboard *clipboard) const
   // get the actual time.  ICCCM does not allow CurrentTime.
   Time timestamp = XWindowsUtil::getCurrentTime(m_display, m_clipboard[id]->getWindow());
 
-  // copy the clipboard
-  return Clipboard::copy(clipboard, m_clipboard[id], timestamp);
+  Clipboard transferable;
+  if (!Clipboard::copy(&transferable, m_clipboard[id], timestamp))
+    return false;
+  deskflow::ClipboardFileTransfer::addFileBundle(
+      &transferable, static_cast<std::uint64_t>(m_maximumClipboardSize) * 1024
+  );
+  return Clipboard::copy(clipboard, &transferable, timestamp);
 }
 
 void XWindowsScreen::getShape(int32_t &x, int32_t &y, int32_t &w, int32_t &h) const

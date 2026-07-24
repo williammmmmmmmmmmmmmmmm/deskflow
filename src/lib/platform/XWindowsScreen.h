@@ -13,6 +13,7 @@
 #include "platform/XDGPowerManager.h"
 #include "platform/XWindowsConfig.h"
 
+#include <climits>
 #include <set>
 #include <vector>
 
@@ -207,6 +208,7 @@ private:
   // clipboards
   XWindowsClipboard *m_clipboard[kClipboardEnd];
   uint32_t m_sequenceNumber = 0;
+  size_t m_maximumClipboardSize = INT_MAX;
 
   // screen saver stuff
   XWindowsScreenSaver *m_screensaver = nullptr;

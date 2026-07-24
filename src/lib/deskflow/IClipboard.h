@@ -48,10 +48,13 @@ public:
   */
   enum class Format
   {
-    Text,        //!< Text format, UTF-8, newline is LF
-    HTML,        //!< HTML format, HTML fragment, UTF-8, newline is LF
-    Bitmap,      //!< Bitmap format, BMP 24/32bpp, BI_RGB
-    TotalFormats //!< The number of clipboard formats supported
+    Text,             //!< Text format, UTF-8, newline is LF
+    HTML,             //!< HTML format, HTML fragment, UTF-8, newline is LF
+    Bitmap,           //!< Bitmap format, BMP 24/32bpp, BI_RGB
+    UriList,          //!< text/uri-list, UTF-8
+    GnomeCopiedFiles, //!< x-special/gnome-copied-files, UTF-8
+    FileBundle,       //!< Deskflow file clipboard payload
+    TotalFormats      //!< The number of clipboard formats supported
   };
 
   //! @name manipulators

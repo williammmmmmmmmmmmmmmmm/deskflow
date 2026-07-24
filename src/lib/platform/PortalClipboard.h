@@ -28,6 +28,8 @@ public:
   // Listed in preference order: richer formats first.
   static constexpr SupportedMime kSupportedMimes[] = {
       {"image/png", IClipboard::Format::Bitmap},
+      {"x-special/gnome-copied-files", IClipboard::Format::GnomeCopiedFiles},
+      {"text/uri-list", IClipboard::Format::UriList},
       {"text/plain;charset=utf-8", IClipboard::Format::Text},
       {"text/plain", IClipboard::Format::Text},
   };

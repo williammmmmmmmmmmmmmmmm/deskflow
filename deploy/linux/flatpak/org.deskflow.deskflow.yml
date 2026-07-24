@@ -9,6 +9,7 @@ finish-args:
   - --socket=fallback-x11
   - --share=network
   - --device=dri
+  - --filesystem=host:ro
   - --talk-name=org.kde.StatusNotifierWatcher
 cleanup:
   - /include
@@ -43,6 +44,7 @@ modules:
   - name: libei
     buildsystem: meson
     config-opts:
+        - --libdir=lib
         - -Ddocumentation=[]
         - -Dtests=disabled
         - -Dliboeffis=disabled
@@ -57,6 +59,7 @@ modules:
   - name: libportal
     buildsystem: meson
     config-opts:
+      - --libdir=lib
       - -Ddocs=false
       - -Dtests=false
       - -Dportal-tests=false
@@ -74,4 +77,3 @@ modules:
     sources:
       - type: dir
         path: ../../../
-

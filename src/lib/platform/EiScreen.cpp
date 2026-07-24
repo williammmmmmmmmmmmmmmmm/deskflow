@@ -13,6 +13,8 @@
 #include "common/Constants.h"
 #include "common/Settings.h"
 #include "deskflow/App.h"
+#include "deskflow/Clipboard.h"
+#include "deskflow/ClipboardFileTransfer.h"
 #include "deskflow/IScreen.h"
 #include "deskflow/OptionTypes.h"
 #include "platform/EiClipboard.h"
@@ -172,21 +174,27 @@ void *EiScreen::getEventTarget() const
 
 bool EiScreen::getClipboard(ClipboardID id, IClipboard *clipboard) const
 {
+  const IClipboard *sourceClipboard = nullptr;
+
   // If using portal input capture, get clipboard from there
   if (m_portalInputCapture) {
-    const auto sourceClipboard = m_portalInputCapture->getClipboard(id);
+    sourceClipboard = m_portalInputCapture->getClipboard(id);
     if (!sourceClipboard) {
       return false;
     }
-    return IClipboard::copy(clipboard, sourceClipboard);
-  }
-
-  // Otherwise use our own clipboard
-  if (!m_clipboard) {
+  } else if (m_clipboard) {
+    sourceClipboard = m_clipboard;
+  } else {
     return false;
   }
 
-  return IClipboard::copy(clipboard, m_clipboard);
+  Clipboard transferable;
+  if (!IClipboard::copy(&transferable, sourceClipboard))
+    return false;
+  ClipboardFileTransfer::addFileBundle(
+      &transferable, static_cast<std::uint64_t>(m_maximumClipboardSize) * 1024
+  );
+  return IClipboard::copy(clipboard, &transferable);
 }
 
 void EiScreen::getShape(int32_t &x, int32_t &y, int32_t &w, int32_t &h) const
@@ -449,13 +457,17 @@ bool EiScreen::setClipboard(ClipboardID id, const IClipboard *clipboard)
     return false;
   }
 
+  Clipboard localClipboard;
+  if (!ClipboardFileTransfer::prepareForLocalClipboard(&localClipboard, clipboard))
+    return false;
+
   // If using portal input capture, set clipboard there
   if (m_portalInputCapture) {
     IClipboard *targetClipboard = m_portalInputCapture->getClipboard(id);
     if (!targetClipboard) {
       return false;
     }
-    return IClipboard::copy(targetClipboard, clipboard);
+    return IClipboard::copy(targetClipboard, &localClipboard);
   }
 
   // Otherwise use our own clipboard
@@ -463,7 +475,7 @@ bool EiScreen::setClipboard(ClipboardID id, const IClipboard *clipboard)
     return false;
   }
 
-  bool ok = IClipboard::copy(m_clipboard, clipboard);
+  bool ok = IClipboard::copy(m_clipboard, &localClipboard);
 
   if (ok && m_portalRemoteDesktop && id == kClipboardClipboard) {
     m_portalRemoteDesktop->claimClipboard();
@@ -496,8 +508,7 @@ void EiScreen::screensaver(bool activate)
 
 void EiScreen::resetOptions()
 {
-  // Should reset options to neutral, see setOptions().
-  // We don't have ei-specific options, nothing to do here
+  m_maximumClipboardSize = INT_MAX;
 }
 
 void EiScreen::setOptions(const OptionsList &options)
