@@ -21,6 +21,7 @@
 #include "platform/EiEventQueueBuffer.h"
 #include "platform/EiKeyState.h"
 #include "platform/PortalInputCapture.h"
+#include "platform/PortalFileTransfer.h"
 #include "platform/PortalRemoteDesktop.h"
 
 #include <algorithm>
@@ -458,16 +459,24 @@ bool EiScreen::setClipboard(ClipboardID id, const IClipboard *clipboard)
   }
 
   Clipboard localClipboard;
-  if (!ClipboardFileTransfer::prepareForLocalClipboard(&localClipboard, clipboard))
+  QStringList localFilePaths;
+  const bool useFileTransferPortal =
+      PortalFileTransfer::isFlatpakSandbox() && (m_portalInputCapture || m_portalRemoteDesktop);
+  if (!ClipboardFileTransfer::prepareForLocalClipboard(
+          &localClipboard, clipboard, {}, &localFilePaths, !useFileTransferPortal
+      ))
     return false;
 
   // If using portal input capture, set clipboard there
   if (m_portalInputCapture) {
-    IClipboard *targetClipboard = m_portalInputCapture->getClipboard(id);
+    auto *targetClipboard = m_portalInputCapture->getClipboard(id);
     if (!targetClipboard) {
       return false;
     }
-    return IClipboard::copy(targetClipboard, &localClipboard);
+    const auto copied = IClipboard::copy(targetClipboard, &localClipboard);
+    if (copied)
+      targetClipboard->setLocalFilePaths(localFilePaths);
+    return copied;
   }
 
   // Otherwise use our own clipboard
@@ -476,6 +485,8 @@ bool EiScreen::setClipboard(ClipboardID id, const IClipboard *clipboard)
   }
 
   bool ok = IClipboard::copy(m_clipboard, &localClipboard);
+  if (ok)
+    m_clipboard->setLocalFilePaths(localFilePaths);
 
   if (ok && m_portalRemoteDesktop && id == kClipboardClipboard) {
     m_portalRemoteDesktop->claimClipboard();

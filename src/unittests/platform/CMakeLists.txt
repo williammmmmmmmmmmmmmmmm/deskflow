@@ -25,6 +25,15 @@ elseif(APPLE)
     WORKING_DIRECTORY "${CMAKE_BINARY_DIR}/src/lib/platform"
   )
 elseif(UNIX)
+  if (LIBEI_FOUND AND LIBPORTAL_FOUND)
+    create_test(
+      NAME PortalFileTransferTests
+      DEPENDS platform
+      LIBS base arch
+      SOURCE PortalFileTransferTests.cpp
+      WORKING_DIRECTORY "${CMAKE_BINARY_DIR}/src/lib/platform"
+    )
+  endif()
   if (BUILD_X11_SUPPORT)
     create_test(
       NAME XWindowsClipboardTests

@@ -8,7 +8,10 @@
 
 #include "deskflow/ClipboardTypes.h"
 #include "deskflow/IClipboard.h"
+#include "platform/PortalFileTransfer.h"
 #include <mutex>
+
+#include <QStringList>
 
 namespace deskflow {
 
@@ -21,7 +24,7 @@ class EiClipboard : public IClipboard
 {
 public:
   explicit EiClipboard(ClipboardID id);
-  ~EiClipboard() override = default;
+  ~EiClipboard() override;
 
   //! Get clipboard ID
   ClipboardID getID() const
@@ -40,6 +43,10 @@ public:
   std::string get(Format) const override;
   //@}
 
+  void setLocalFilePaths(const QStringList &paths);
+  QStringList localFilePaths() const;
+  PortalFileTransfer &portalFileTransfer();
+
 private:
   ClipboardID m_id;
   mutable bool m_open = false;
@@ -49,6 +56,8 @@ private:
   Time m_timeOwned = 0;
   bool m_added[static_cast<int>(Format::TotalFormats)] = {};
   std::string m_data[static_cast<int>(Format::TotalFormats)] = {};
+  QStringList m_localFilePaths;
+  PortalFileTransfer m_portalFileTransfer;
 };
 
 } // namespace deskflow

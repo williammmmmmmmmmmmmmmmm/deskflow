@@ -604,9 +604,13 @@ bool ClipboardFileTransfer::addFileBundle(IClipboard *clipboard, std::uint64_t m
 }
 
 bool ClipboardFileTransfer::prepareForLocalClipboard(
-    Clipboard *destination, const IClipboard *source, const QString &destinationRoot
+    Clipboard *destination, const IClipboard *source, const QString &destinationRoot,
+    QStringList *materializedPaths, bool exposeFileUris
 )
 {
+  if (materializedPaths)
+    materializedPaths->clear();
+
   if (!destination || !source || !IClipboard::copy(destination, source))
     return false;
 
@@ -636,10 +640,18 @@ bool ClipboardFileTransfer::prepareForLocalClipboard(
     return writeSnapshot(destination, snapshot);
   }
 
-  snapshot.added[uriIndex] = true;
-  snapshot.data[uriIndex] = std::move(localUris);
-  snapshot.added[gnomeIndex] = true;
-  snapshot.data[gnomeIndex] = std::move(localGnome);
+  if (materializedPaths) {
+    for (const auto &line : mimeLines(localUris)) {
+      const auto url = QUrl::fromEncoded(line.toUtf8());
+      if (url.isLocalFile())
+        materializedPaths->append(url.toLocalFile());
+    }
+  }
+
+  snapshot.added[uriIndex] = exposeFileUris;
+  snapshot.data[uriIndex] = exposeFileUris ? std::move(localUris) : std::string{};
+  snapshot.added[gnomeIndex] = exposeFileUris;
+  snapshot.data[gnomeIndex] = exposeFileUris ? std::move(localGnome) : std::string{};
   return writeSnapshot(destination, snapshot);
 }
 

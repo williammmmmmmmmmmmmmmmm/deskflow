@@ -159,6 +159,8 @@ elseif(UNIX)
     # The Portal sources also require EI.
     if(LIBPORTAL_FOUND)
       list(APPEND PLATFORM_SOURCES
+        PortalFileTransfer.cpp
+        PortalFileTransfer.h
         PortalInputCapture.cpp
         PortalInputCapture.h
         PortalRemoteDesktop.cpp

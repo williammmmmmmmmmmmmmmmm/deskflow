@@ -16,6 +16,8 @@ EiClipboard::EiClipboard(ClipboardID id) : m_id(id)
   close();
 }
 
+EiClipboard::~EiClipboard() = default;
+
 bool EiClipboard::empty()
 {
   std::scoped_lock lock{m_mutex};
@@ -29,6 +31,8 @@ bool EiClipboard::empty()
     m_data[index] = "";
     m_added[index] = false;
   }
+  m_localFilePaths.clear();
+  m_portalFileTransfer.stop();
 
   // Save time
   m_timeOwned = m_time;
@@ -103,6 +107,23 @@ std::string EiClipboard::get(Format format) const
     return "";
   }
   return m_data[static_cast<int>(format)];
+}
+
+void EiClipboard::setLocalFilePaths(const QStringList &paths)
+{
+  std::scoped_lock lock{m_mutex};
+  m_localFilePaths = paths;
+}
+
+QStringList EiClipboard::localFilePaths() const
+{
+  std::scoped_lock lock{m_mutex};
+  return m_localFilePaths;
+}
+
+PortalFileTransfer &EiClipboard::portalFileTransfer()
+{
+  return m_portalFileTransfer;
 }
 
 } // namespace deskflow

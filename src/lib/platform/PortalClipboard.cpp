@@ -21,6 +21,8 @@
 #include <QList>
 #include <QPair>
 #include <QSet>
+#include <QStringList>
+#include <QUrl>
 #include <QVarLengthArray>
 #include <QtEndian>
 
@@ -29,6 +31,44 @@ namespace deskflow {
 static constexpr int kBmpSignatureSize = 2;
 static constexpr quint32 kBmpFileHeaderSize = 14;
 static constexpr quint32 kMinDibHeaderSize = 12;
+
+namespace {
+
+QStringList localPathsFromMime(const QByteArray &bytes)
+{
+  auto text = QString::fromUtf8(bytes);
+  text.replace(QStringLiteral("\r\n"), QStringLiteral("\n"));
+  auto lines = text.split(u'\n', Qt::SkipEmptyParts);
+  if (!lines.isEmpty() && (lines.front() == QStringLiteral("copy") || lines.front() == QStringLiteral("cut")))
+    lines.removeFirst();
+
+  QStringList paths;
+  for (const auto &line : lines) {
+    const auto url = QUrl::fromEncoded(line.toUtf8());
+    if (url.isLocalFile())
+      paths.append(url.toLocalFile());
+  }
+  return paths;
+}
+
+QPair<QByteArray, QByteArray> localFileMimeData(const QStringList &paths, bool cut)
+{
+  QStringList uris;
+  for (const auto &path : paths)
+    uris.append(QString::fromUtf8(QUrl::fromLocalFile(path).toEncoded(QUrl::FullyEncoded)));
+
+  const auto uriList = (uris.join(QStringLiteral("\r\n")) + QStringLiteral("\r\n")).toUtf8();
+  const auto gnome =
+      ((cut ? QStringLiteral("cut\n") : QStringLiteral("copy\n")) + uris.join(u'\n') + u'\n').toUtf8();
+  return {uriList, gnome};
+}
+
+bool hasMime(const char *const *mimeTypes, const char *mime)
+{
+  return mimeTypes && g_strv_contains(mimeTypes, mime);
+}
+
+} // namespace
 
 QByteArray PortalClipboard::formatMimeTypes(const char *const *mimeTypes)
 {
@@ -192,13 +232,29 @@ void PortalClipboard::claimOwnership(EiClipboard *cache, XdpSession *session)
   if (!cache || !session)
     return;
 
+  QVarLengthArray<const char *, std::size(kSupportedMimes) + 2> mimeTypes;
+  const auto localFilePaths = cache->localFilePaths();
+  const bool flatpakSandbox = PortalFileTransfer::isFlatpakSandbox();
+  const bool useFileTransferPortal = flatpakSandbox && !localFilePaths.isEmpty();
   cache->open(0);
-  QVarLengthArray<const char *, std::size(kSupportedMimes) + 1> mimeTypes;
   for (const auto &entry : kSupportedMimes) {
+    if (flatpakSandbox &&
+        (entry.format == IClipboard::Format::UriList || entry.format == IClipboard::Format::GnomeCopiedFiles))
+      continue;
     if (cache->has(entry.format))
       mimeTypes.append(entry.mime);
   }
   cache->close();
+
+  if (useFileTransferPortal) {
+    QString error;
+    if (cache->portalFileTransfer().exportFiles(localFilePaths, &error))
+      mimeTypes.append(PortalFileTransfer::kMimeType);
+    else
+      LOG_WARN("failed to export clipboard files through XDG FileTransfer Portal: %s", error.toUtf8().constData());
+  } else {
+    cache->portalFileTransfer().stop();
+  }
 
   if (mimeTypes.isEmpty()) {
     LOG_DEBUG("clipboard cache empty, nothing to claim");
@@ -214,21 +270,26 @@ void PortalClipboard::serveSelectionTransfer(EiClipboard *cache, XdpSession *ses
 {
   LOG_DEBUG("clipboard selection transfer requested, mime: %s, serial: %u", mime, serial);
 
+  const bool portalFileTransfer = g_strcmp0(mime, PortalFileTransfer::kMimeType) == 0;
   const auto *requested = findSupportedMime(mime);
-  if (!requested || !cache) {
+  if ((!requested && !portalFileTransfer) || !cache) {
     LOG_DEBUG("rejecting clipboard selection, unsupported mime: %s", mime);
     xdp_session_selection_write_done(session, serial, false);
     return;
   }
 
-  cache->open(0);
   QByteArray raw;
-  const bool hasFormat = cache->has(requested->format);
-  if (hasFormat)
-    raw = QByteArray::fromStdString(cache->get(requested->format));
-  cache->close();
-
-  const auto data = encodeFormat(requested->format, raw);
+  QByteArray data;
+  if (portalFileTransfer) {
+    data = cache->portalFileTransfer().mimeData();
+  } else {
+    cache->open(0);
+    const bool hasFormat = cache->has(requested->format);
+    if (hasFormat)
+      raw = QByteArray::fromStdString(cache->get(requested->format));
+    cache->close();
+    data = encodeFormat(requested->format, raw);
+  }
   if (data.isEmpty()) {
     LOG_DEBUG("clipboard has no data for mime: %s", mime);
     xdp_session_selection_write_done(session, serial, false);
@@ -281,13 +342,37 @@ bool PortalClipboard::readSelectionIntoCache(
   if (!cache || !session || !mimeTypes || !mimeTypes[0])
     return false;
 
-  if (!pickSupportedMime(mimeTypes)) {
+  if (!pickSupportedMime(mimeTypes) && !hasMime(mimeTypes, PortalFileTransfer::kMimeType)) {
     LOG_DEBUG("clipboard no supported mime types: %s", formatMimeTypes(mimeTypes).constData());
     return false;
   }
 
   QList<QPair<IClipboard::Format, QByteArray>> reads;
   QSet<IClipboard::Format> seen;
+  QStringList localFilePaths;
+
+  if (hasMime(mimeTypes, PortalFileTransfer::kMimeType)) {
+    const auto key = readSelectionBytes(session, PortalFileTransfer::kMimeType, maxBytes);
+    if (!key.isEmpty()) {
+      QString error;
+      localFilePaths = cache->portalFileTransfer().retrieveFiles(key, &error);
+      if (localFilePaths.isEmpty()) {
+        LOG_WARN("failed to retrieve clipboard files through XDG FileTransfer Portal: %s", error.toUtf8().constData());
+      } else {
+        bool cut = false;
+        if (hasMime(mimeTypes, "x-special/gnome-copied-files")) {
+          const auto action = readSelectionBytes(session, "x-special/gnome-copied-files", maxBytes);
+          cut = action.startsWith("cut\n");
+        }
+        const auto [uriList, gnome] = localFileMimeData(localFilePaths, cut);
+        reads.append({IClipboard::Format::UriList, uriList});
+        reads.append({IClipboard::Format::GnomeCopiedFiles, gnome});
+        seen.insert(IClipboard::Format::UriList);
+        seen.insert(IClipboard::Format::GnomeCopiedFiles);
+      }
+    }
+  }
+
   for (const auto &entry : kSupportedMimes) {
     if (seen.contains(entry.format))
       continue;
@@ -312,6 +397,9 @@ bool PortalClipboard::readSelectionIntoCache(
 
     reads.append({entry.format, std::move(data)});
     seen.insert(entry.format);
+    if (localFilePaths.isEmpty() &&
+        (entry.format == IClipboard::Format::UriList || entry.format == IClipboard::Format::GnomeCopiedFiles))
+      localFilePaths = localPathsFromMime(bytes);
   }
 
   if (reads.isEmpty()) {
@@ -324,6 +412,7 @@ bool PortalClipboard::readSelectionIntoCache(
   for (const auto &[format, data] : reads)
     cache->add(format, data.toStdString());
   cache->close();
+  cache->setLocalFilePaths(localFilePaths);
 
   LOG_DEBUG("clipboard read local selection, formats: %lld", static_cast<long long>(reads.size()));
   return true;

@@ -1,0 +1,653 @@
+[1mdiff --git a/docs/Readme.md b/docs/Readme.md[m
+[1mindex 350aa0859..a67f6c057 100644[m
+[1m--- a/docs/Readme.md[m
+[1m+++ b/docs/Readme.md[m
+[36m@@ -4,6 +4,12 @@[m [mDeskflow is a free and open source keyboard and mouse sharing app. Use the keybo[m
+ [m
+ [Homepage](https://deskflow.org) [Code](https://github.com/deskflow/deskflo)[m
+ [m
+[32m+[m[32m## Experimental Ubuntu clipboard file transfer[m
+[32m+[m
+[32m+[m[32mDeskflow can experimentally transfer text, images, and files copied in Nautilus[m
+[32m+[m[32mbetween Ubuntu Wayland/X11 computers. See the[m
+[32m+[m[32m[bilingual Ubuntu clipboard file transfer guide](ubuntu_clipboard_file_transfer.md).[m
+[32m+[m
+ ## Getting help online[m
+ [m
+  - View the [wiki](https://github.com/deskflow/deskflow/wiki) Online resource[m
+[1mdiff --git a/docs/ubuntu_clipboard_file_transfer.md b/docs/ubuntu_clipboard_file_transfer.md[m
+[1mnew file mode 100644[m
+[1mindex 000000000..2fb5e86c3[m
+[1m--- /dev/null[m
+[1m+++ b/docs/ubuntu_clipboard_file_transfer.md[m
+[36m@@ -0,0 +1,630 @@[m
+[32m+[m[32m# Ubuntu cross-device clipboard file transfer[m
+[32m+[m
+[32m+[m[32m> Experimental feature / 实验性功能[m
+[32m+[m
+[32m+[m[32mThis document is bilingual. The Chinese guide appears first, followed by the[m
+[32m+[m[32mEnglish guide.[m
+[32m+[m
+[32m+[m[32m本文档为中英双语版本，先中文，后英文。[m
+[32m+[m
+[32m+[m[32m---[m
+[32m+[m
+[32m+[m[32m## 中文[m
+[32m+[m
+[32m+[m[32m### 1. 功能范围[m
+[32m+[m
+[32m+[m[32m此实验性功能面向两台运行 Ubuntu 的电脑，让 Deskflow 在切换活动屏幕后同步：[m
+[32m+[m
+[32m+[m[32m- UTF-8 文本和现有 HTML 剪贴板内容；[m
+[32m+[m[32m- PNG/BMP 图片剪贴板内容；[m
+[32m+[m[32m- Nautilus 中复制的一个或多个普通文件；[m
+[32m+[m[32m- Nautilus 中复制的目录及其普通文件子项。[m
+[32m+[m
+[32m+[m[32m在源电脑的 Nautilus 中按 `Ctrl+C`，切换到另一台电脑后，可在接收端[m
+[32m+[m[32mNautilus 中直接按 `Ctrl+V`。文件传输的是实际内容，而不是只有源电脑才能[m
+[32m+[m[32m访问的路径。[m
+[32m+[m
+[32m+[m[32m文件剪贴板目前以 Ubuntu 24.04 的 GNOME、Nautilus、Wayland 和 X11 为优先[m
+[32m+[m[32m目标。它不恢复或依赖旧的拖拽传输代码。[m
+[32m+[m
+[32m+[m[32m### 2. 架构[m
+[32m+[m
+[32m+[m[32m数据沿用 Deskflow 的剪贴板同步路径：[m
+[32m+[m
+[32m+[m[32m```text[m
+[32m+[m[32mNautilus / application clipboard[m
+[32m+[m[32m        |[m
+[32m+[m[32m        | Wayland: xdg-desktop-portal + libei[m
+[32m+[m[32m        | X11: X selection converters[m
+[32m+[m[32m        v[m
+[32m+[m[32mDeskflow clipboard formats[m
+[32m+[m[32m        |[m
+[32m+[m[32m        | Read selected local files and build a DFCB v1 content bundle[m
+[32m+[m[32m        v[m
+[32m+[m[32mExisting chunked DCLP clipboard protocol[m
+[32m+[m[32m        |[m
+[32m+[m[32m        v[m
+[32m+[m[32mValidate and materialize files in a receiver-local cache[m
+[32m+[m[32m        |[m
+[32m+[m[32m        | Rebuild local file:// URIs and claim the local clipboard[m
+[32m+[m[32m        v[m
+[32m+[m[32mReceiver Nautilus Ctrl+V[m
+[32m+[m[32m```[m
+[32m+[m
+[32m+[m[32m源端解析文件 URI，递归读取普通目录和普通文件，将文件内容、相对路径和基本[m
+[32m+[m[32m权限写入版本化的内部文件包。该文件包通过现有的分块 `DCLP` 剪贴板消息传送。[m
+[32m+[m
+[32m+[m[32m接收端先验证文件包，再将内容写入[m
+[32m+[m[32m`QStandardPaths::CacheLocation/clipboard-files/<UUID>`，最后生成指向这些本地[m
+[32m+[m[32m文件的 URI，写回 Wayland Portal 或 X11 剪贴板。[m
+[32m+[m
+[32m+[m[32m内部格式编号追加在原有 Text、HTML、Bitmap 格式之后。旧版客户端会忽略无法[m
+[32m+[m[32m识别的追加格式，因此现有文本和图片剪贴板保持兼容；文件粘贴要求两端都使用[m
+[32m+[m[32m支持该功能的版本。[m
+[32m+[m
+[32m+[m[32m### 3. 支持的 MIME 类型[m
+[32m+[m
+[32m+[m[32m| MIME/内部格式 | 用途 |[m
+[32m+[m[32m| --- | --- |[m
+[32m+[m[32m| `text/uri-list` | 标准文件 URI 列表，支持一个或多个本地 `file://` URI |[m
+[32m+[m[32m| `x-special/gnome-copied-files` | GNOME/Nautilus 文件剪贴板；第一行是 `copy` 或 `cut`，后续为 URI |[m
+[32m+[m[32m| `image/png` | Wayland 和 X11 的主要图片交换格式 |[m
+[32m+[m[32m| `image/bmp` | X11 图片兼容格式 |[m
+[32m+[m[32m| `text/plain;charset=utf-8`、`text/plain`、`UTF8_STRING` | 文本剪贴板格式 |[m
+[32m+[m[32m| Deskflow `FileBundle` | 仅用于 Deskflow 协议内部，包含实际文件内容；不会作为系统 MIME 对外发布 |[m
+[32m+[m
+[32m+[m[32m当源端同时提供 `x-special/gnome-copied-files` 和 `text/uri-list` 时，优先使用[m
+[32m+[m[32mGNOME 格式以保留 `copy`/`cut` 动作。[m
+[32m+[m
+[32m+[m[32m### 4. Ubuntu 24.04 构建和安装[m
+[32m+[m
+[32m+[m[32m#### 4.1 会话支持[m
+[32m+[m
+[32m+[m[32m- **Wayland**：使用 libei 和 xdg-desktop-portal 的 Remote Desktop/Input[m
+[32m+[m[32m  Capture 剪贴板接口。首次运行时需要接受桌面显示的 Portal 权限请求。[m
+[32m+[m[32m- **X11**：使用 X selection 和 Deskflow 的 X11 MIME 转换器。[m
+[32m+[m[32m- Ubuntu 登录界面的齿轮菜单中，`Ubuntu` 通常是 Wayland，[m
+[32m+[m[32m  `Ubuntu on Xorg` 是 X11。[m
+[32m+[m
+[32m+[m[32m两种后端可同时编入一个二进制。不要手动修改 `DISPLAY` 或[m
+[32m+[m[32m`WAYLAND_DISPLAY`；应在目标桌面会话内启动 Deskflow。[m
+[32m+[m
+[32m+[m[32m#### 4.2 推荐：Flatpak 构建[m
+[32m+[m
+[32m+[m[32mUbuntu 24.04 仓库中的部分 Qt、libei 或 libportal 版本可能低于本项目要求。[m
+[32m+[m[32m项目 Flatpak 清单固定了可用依赖，因此这是推荐的验证方式。[m
+[32m+[m
+[32m+[m[32m当前最低依赖为：[m
+[32m+[m
+[32m+[m[32m- CMake 3.24；[m
+[32m+[m[32m- Qt 6.7；[m
+[32m+[m[32m- libei 1.3；[m
+[32m+[m[32m- libportal 0.9.1；[m
+[32m+[m[32m- OpenSSL 3.0。[m
+[32m+[m
+[32m+[m[32m安装构建工具和用户级 KDE SDK：[m
+[32m+[m
+[32m+[m[32m```bash[m
+[32m+[m[32msudo apt update[m
+[32m+[m[32msudo apt install flatpak flatpak-builder[m
+[32m+[m[32mflatpak remote-add --user --if-not-exists flathub \[m
+[32m+[m[32m  https://dl.flathub.org/repo/flathub.flatpakrepo[m
+[32m+[m[32mflatpak install --user flathub org.kde.Platform//6.10 org.kde.Sdk//6.10[m
+[32m+[m[32m```[m
+[32m+[m
+[32m+[m[32m只构建、不安装：[m
+[32m+[m
+[32m+[m[32m```bash[m
+[32m+[m[32mflatpak-builder --force-clean --build-only \[m
+[32m+[m[32m  flatpak-build deploy/linux/flatpak/org.deskflow.deskflow.yml[m
+[32m+[m[32m```[m
+[32m+[m
+[32m+[m[32m安装为用户级测试版本：[m
+[32m+[m
+[32m+[m[32m```bash[m
+[32m+[m[32mflatpak-builder --force-clean --user --install \[m
+[32m+[m[32m  flatpak-build deploy/linux/flatpak/org.deskflow.deskflow.yml[m
+[32m+[m[32mflatpak run --user org.deskflow.deskflow[m
+[32m+[m[32m```[m
+[32m+[m
+[32m+[m[32m`--user` 不会覆盖系统级 Flatpak。若系统中已有同 ID 的 Deskflow，用户级构建[m
+[32m+[m[32m会在当前用户下优先运行；回滚时删除用户级构建即可恢复使用系统版本。不要为[m
+[32m+[m[32m此测试使用 `--system`。[m
+[32m+[m
+[32m+[m[32m为了读取 Nautilus 复制的实际文件，源码中的 Flatpak 清单包含[m
+[32m+[m[32m`--filesystem=host:ro`。这是只读权限，但范围较广，可以用以下命令检查最终[m
+[32m+[m[32m权限：[m
+[32m+[m
+[32m+[m[32m```bash[m
+[32m+[m[32mflatpak info --user --show-permissions org.deskflow.deskflow[m
+[32m+[m[32m```[m
+[32m+[m
+[32m+[m[32m#### 4.3 原生构建[m
+[32m+[m
+[32m+[m[32m只有在系统或自定义前缀已经提供上述最低版本依赖时才建议原生构建。Ubuntu[m
+[32m+[m[32m24.04 的默认 APT 包不一定满足版本要求。[m
+[32m+[m
+[32m+[m[32m以下命令构建 Wayland 后端，同时显式保留 X11 后端，并安装到仓库内的独立[m
+[32m+[m[32m目录，避免修改系统安装：[m
+[32m+[m
+[32m+[m[32m```bash[m
+[32m+[m[32mcmake -S . -B build-native -G Ninja \[m
+[32m+[m[32m  -DCMAKE_BUILD_TYPE=Release \[m
+[32m+[m[32m  -DCMAKE_INSTALL_PREFIX="$PWD/install-native" \[m
+[32m+[m[32m  -DBUILD_X11_SUPPORT=ON \[m
+[32m+[m[32m  -DBUILD_TESTS=ON[m
+[32m+[m[32mcmake --build build-native --parallel[m
+[32m+[m[32mctest --test-dir build-native --output-on-failure[m
+[32m+[m[32mcmake --install build-native[m
+[32m+[m[32m```[m
+[32m+[m
+[32m+[m[32m从 `install-native/bin/deskflow` 启动测试版本。更完整的通用构建说明见[m
+[32m+[m[32m[Building Deskflow](dev/build.md)。[m
+[32m+[m
+[32m+[m[32m### 5. 双机使用步骤[m
+[32m+[m
+[32m+[m[32m1. 在两台 Ubuntu 电脑上安装同一功能版本的 Deskflow。[m
+[32m+[m[32m2. 按常规方式将一台配置为 Deskflow Server，另一台配置为 Client，并完成[m
+[32m+[m[32m   屏幕布局、网络和身份验证设置。[m
+[32m+[m[32m3. 在 Server 配置中启用 **Enable clipboard sharing**，并确认[m
+[32m+[m[32m   **Limit to** 足以容纳要复制的文件。[m
+[32m+[m[32m4. 在 Wayland 会话中接受 Deskflow 的 Portal 权限请求。X11 不需要 Portal[m
+[32m+[m[32m   剪贴板权限。[m
+[32m+[m[32m5. 先验证文本：在一台电脑复制一段 UTF-8 文本，切换到另一台电脑后粘贴。[m
+[32m+[m[32m6. 验证图片：从图片应用或截图工具复制图片，切换后粘贴到支持图片的应用。[m
+[32m+[m[32m7. 验证文件：在 Nautilus 中选择一个或多个文件或目录并按 `Ctrl+C`。[m
+[32m+[m[32m8. 将鼠标移到另一台电脑，使其成为活动屏幕。在接收端 Nautilus 中打开目标[m
+[32m+[m[32m   目录并按 `Ctrl+V`。[m
+[32m+[m[32m9. 对重要文件使用 `sha256sum` 对比两端内容。[m
+[32m+[m
+[32m+[m[32m建议先用小型测试数据：[m
+[32m+[m
+[32m+[m[32m```bash[m
+[32m+[m[32mmkdir -p "$HOME/DeskflowClipboardTest/folder"[m
+[32m+[m[32mprintf 'Deskflow UTF-8 test 中文\n' \[m
+[32m+[m[32m  > "$HOME/DeskflowClipboardTest/text.txt"[m
+[32m+[m[32mhead -c 65536 /dev/urandom \[m
+[32m+[m[32m  > "$HOME/DeskflowClipboardTest/folder/random.bin"[m
+[32m+[m[32msha256sum "$HOME/DeskflowClipboardTest/text.txt" \[m
+[32m+[m[32m  "$HOME/DeskflowClipboardTest/folder/random.bin"[m
+[32m+[m[32m```[m
+[32m+[m
+[32m+[m[32m### 6. 大小限制[m
+[32m+[m
+[32m+[m[32m- 默认最大剪贴板大小为 **3 MiB**。[m
+[32m+[m[32m- 限制作用于整个序列化剪贴板，包括文本、图片、文件元数据、文件内容和协议[m
+[32m+[m[32m  头，不只是单个文件。[m
+[32m+[m[32m- 多文件和目录的所有内容共用同一限制。[m
+[32m+[m[32m- 超限、源文件不可读或读取期间变短时，Deskflow 会放弃该文件剪贴板并写入[m
+[32m+[m[32m  警告日志；同时存在的普通文本或图片格式仍会保留。[m
+[32m+[m[32m- 大文件会在内存中形成完整文件包。网络传输虽然使用现有分块消息，但目前不[m
+[32m+[m[32m  是端到端的磁盘流式传输。[m
+[32m+[m
+[32m+[m[32m可在 Server 配置的 **Enable clipboard sharing** 旁调整 **Limit to**。[m
+[32m+[m[32m提高限制会同时增加内存、网络和接收端磁盘占用，应按实际需要设置。[m
+[32m+[m
+[32m+[m[32m### 7. 安全措施[m
+[32m+[m
+[32m+[m[32m- 只处理剪贴板明确列出的本地 `file://` URI。[m
+[32m+[m[32m- 拒绝非本地 URL、不存在的路径、符号链接、设备、FIFO、套接字等特殊文件。[m
+[32m+[m[32m- 接收端验证签名、版本、动作、数量、UTF-8、根目录、重复路径、绝对路径、[m
+[32m+[m[32m  `.`/`..` 路径穿越、声明长度、截断和尾随数据。[m
+[32m+[m[32m- 每次接收使用新的 UUID 缓存目录，文件通过 `QSaveFile` 原子写入；失败时[m
+[32m+[m[32m  删除该次未完成目录。[m
+[32m+[m[32m- 文件包缺失或验证失败时，不会把源电脑的远程路径发布到本地剪贴板。[m
+[32m+[m[32m- 现有剪贴板大小配置同时充当资源上限。[m
+[32m+[m[32m- Flatpak 构建只以只读方式访问宿主文件；接收文件写入应用自己的缓存区域。[m
+[32m+[m
+[32m+[m[32m文件包没有独立于 Deskflow 连接的第二层加密。传输安全性继承当前 Deskflow[m
+[32m+[m[32m连接配置，因此只应连接可信电脑，并启用项目提供的身份验证和加密设置。[m
+[32m+[m
+[32m+[m[32m### 8. 已知限制[m
+[32m+[m
+[32m+[m[32m- 这是实验性 Ubuntu-to-Ubuntu 功能，不保证其他桌面环境或操作系统支持文件[m
+[32m+[m[32m  粘贴。[m
+[32m+[m[32m- 两端都必须支持新增格式；旧客户端仍可同步已有文本/图片，但不能接收实际[m
+[32m+[m[32m  文件内容。[m
+[32m+[m[32m- 仅支持本地文件 URI。`smb://`、`sftp://`、Google Drive、GVfs 虚拟位置等[m
+[32m+[m[32m  非本地 URI 会被拒绝。[m
+[32m+[m[32m- 符号链接和特殊文件不传输。[m
+[32m+[m[32m- 仅保留普通文件、目录和基本 Unix 权限；不保留所有者、ACL、扩展属性、[m
+[32m+[m[32m  稀疏布局、硬链接关系和原始时间戳。[m
+[32m+[m[32m- `cut` 标记会在接收端保留，但跨电脑粘贴不会删除源电脑上的原文件；其效果[m
+[32m+[m[32m  更接近“把接收缓存移动到目标目录”。[m
+[32m+[m[32m- 接收缓存不会在粘贴后立即删除，因为 Nautilus 仍可能请求其中的文件。缓存[m
+[32m+[m[32m  会占用磁盘空间；仅在 Deskflow 已停止且剪贴板不再引用旧文件时清理。[m
+[32m+[m[32m- 源文件在复制和 Deskflow 读取之间被删除、缩短或变为不可读时，本次文件[m
+[32m+[m[32m  同步会失败。[m
+[32m+[m[32m- Wayland 支持依赖桌面 Portal 后端提供并允许剪贴板接口。[m
+[32m+[m[32m- Flatpak 的 `host:ro` 权限允许应用读取广泛的宿主文件。只运行可信构建。[m
+[32m+[m
+[32m+[m[32m### 9. 测试方法[m
+[32m+[m
+[32m+[m[32m运行全部单元测试：[m
+[32m+[m
+[32m+[m[32m```bash[m
+[32m+[m[32mcmake -S . -B build-test -G Ninja \[m
+[32m+[m[32m  -DCMAKE_BUILD_TYPE=Debug \[m
+[32m+[m[32m  -DBUILD_TESTS=ON \[m
+[32m+[m[32m  -DBUILD_X11_SUPPORT=ON[m
+[32m+[m[32mcmake --build build-test --parallel[m
+[32m+[m[32mctest --test-dir build-test --output-on-failure[m
+[32m+[m[32m```[m
+[32m+[m
+[32m+[m[32m只运行文件剪贴板测试：[m
+[32m+[m
+[32m+[m[32m```bash[m
+[32m+[m[32mctest --test-dir build-test -R ClipboardFileTransferTests -V[m
+[32m+[m[32m```[m
+[32m+[m
+[32m+[m[32m该测试覆盖多文件、二进制内容、递归目录、本地 URI 重写、保留其他剪贴板[m
+[32m+[m[32m格式、缺少内容包时移除远程 URI、路径穿越、大小限制和新增格式编解码。[m
+[32m+[m
+[32m+[m[32m手工测试至少应覆盖：[m
+[32m+[m
+[32m+[m[32m- Wayland → Wayland；[m
+[32m+[m[32m- X11 → X11；[m
+[32m+[m[32m- Wayland → X11 和 X11 → Wayland；[m
+[32m+[m[32m- 文本、PNG 图片、单文件、多文件、带空格/中文文件名和嵌套目录；[m
+[32m+[m[32m- 超过大小限制、删除源文件、旧客户端连接等失败/兼容场景。[m
+[32m+[m
+[32m+[m[32m可以在复制后查看本地剪贴板声明的 MIME：[m
+[32m+[m
+[32m+[m[32m```bash[m
+[32m+[m[32m# Wayland；需要 wl-clipboard[m
+[32m+[m[32mwl-paste --list-types[m
+[32m+[m
+[32m+[m[32m# X11；需要 xclip[m
+[32m+[m[32mxclip -selection clipboard -target TARGETS -out[m
+[32m+[m[32m```[m
+[32m+[m
+[32m+[m[32m预期文件复制至少包含 `text/uri-list` 或[m
+[32m+[m[32m`x-special/gnome-copied-files`；Nautilus 通常同时提供两者。[m
+[32m+[m
+[32m+[m[32m### 10. 回滚[m
+[32m+[m
+[32m+[m[32m回滚用户级 Flatpak 测试构建：[m
+[32m+[m
+[32m+[m[32m```bash[m
+[32m+[m[32mflatpak uninstall --user org.deskflow.deskflow[m
+[32m+[m[32m```[m
+[32m+[m
+[32m+[m[32m如果系统中原本已有 Deskflow Flatpak，该命令不会删除系统级版本。随后直接[m
+[32m+[m[32m启动系统版本即可。[m
+[32m+[m
+[32m+[m[32m原生测试构建安装在仓库的 `install-native` 独立目录中。停止该二进制并改回[m
+[32m+[m[32m原有 Deskflow 即可；确认目录中没有需要保留的内容后再删除测试构建目录。[m
+[32m+[m
+[32m+[m[32m若要从 Git 历史撤销功能提交，优先创建可审计的反向提交：[m
+[32m+[m
+[32m+[m[32m```bash[m
+[32m+[m[32mgit revert <ubuntu-clipboard-feature-commit>[m
+[32m+[m[32m```[m
+[32m+[m
+[32m+[m[32m回滚后重新构建并在两台电脑上部署相同版本。不要直接修改或覆盖系统安装目录[m
+[32m+[m[32m中的二进制。[m
+[32m+[m
+[32m+[m[32m---[m
+[32m+[m
+[32m+[m[32m## English[m
+[32m+[m
+[32m+[m[32m### 1. Scope[m
+[32m+[m
+[32m+[m[32mThis experimental feature targets two Ubuntu computers and synchronizes the[m
+[32m+[m[32mfollowing Deskflow clipboard data after the active screen changes:[m
+[32m+[m
+[32m+[m[32m- UTF-8 text and existing HTML clipboard data;[m
+[32m+[m[32m- PNG/BMP image clipboard data;[m
+[32m+[m[32m- one or more regular files copied in Nautilus;[m
+[32m+[m[32m- directories copied in Nautilus, including their regular-file contents.[m
+[32m+[m
+[32m+[m[32mCopy with `Ctrl+C` in Nautilus on the source computer, switch to the other[m
+[32m+[m[32mcomputer, and paste directly with `Ctrl+V` in Nautilus. Deskflow transfers the[m
+[32m+[m[32mactual file contents rather than paths that only the source computer can access.[m
+[32m+[m
+[32m+[m[32mUbuntu 24.04 GNOME with Nautilus, Wayland, and X11 are the priority targets.[m
+[32m+[m[32mThe implementation neither restores nor depends on the deprecated drag-and-drop[m
+[32m+[m[32mtransfer code.[m
+[32m+[m
+[32m+[m[32m### 2. Architecture[m
+[32m+[m
+[32m+[m[32mThe feature uses Deskflow's existing clipboard synchronization path:[m
+[32m+[m
+[32m+[m[32m```text[m
+[32m+[m[32mNautilus / application clipboard[m
+[32m+[m[32m        |[m
+[32m+[m[32m        | Wayland: xdg-desktop-portal + libei[m
+[32m+[m[32m        | X11: X selection converters[m
+[32m+[m[32m        v[m
+[32m+[m[32mDeskflow clipboard formats[m
+[32m+[m[32m        |[m
+[32m+[m[32m        | Read selected local files and build a DFCB v1 content bundle[m
+[32m+[m[32m        v[m
+[32m+[m[32mExisting chunked DCLP clipboard protocol[m
+[32m+[m[32m        |[m
+[32m+[m[32m        v[m
+[32m+[m[32mValidate and materialize files in a receiver-local cache[m
+[32m+[m[32m        |[m
+[32m+[m[32m        | Rebuild local file:// URIs and claim the local clipboard[m
+[32m+[m[32m        v[m
+[32m+[m[32mReceiver Nautilus Ctrl+V[m
+[32m+[m[32m```[m
+[32m+[m
+[32m+[m[32mThe source parses file URIs, recursively reads regular directories and files,[m
+[32m+[m[32mand records contents, relative paths, and basic permissions in a versioned[m
+[32m+[m[32minternal bundle. The existing chunked `DCLP` clipboard message transports that[m
+[32m+[m[32mbundle.[m
+[32m+[m
+[32m+[m[32mThe receiver validates the bundle, writes it below[m
+[32m+[m[32m`QStandardPaths::CacheLocation/clipboard-files/<UUID>`, rebuilds URIs that point[m
+[32m+[m[32mto those local files, and publishes them through the Wayland Portal or X11[m
+[32m+[m[32mclipboard.[m
+[32m+[m
+[32m+[m[32mThe new internal format IDs are appended after the original Text, HTML, and[m
+[32m+[m[32mBitmap IDs. Older peers ignore unknown appended IDs and continue to process[m
+[32m+[m[32mexisting text and image formats. File paste requires feature-capable builds at[m
+[32m+[m[32mboth endpoints.[m
+[32m+[m
+[32m+[m[32m### 3. Supported MIME types[m
+[32m+[m
+[32m+[m[32m| MIME/internal format | Purpose |[m
+[32m+[m[32m| --- | --- |[m
+[32m+[m[32m| `text/uri-list` | Standard list containing one or more local `file://` URIs |[m
+[32m+[m[32m| `x-special/gnome-copied-files` | GNOME/Nautilus file clipboard; the first line is `copy` or `cut`, followed by URIs |[m
+[32m+[m[32m| `image/png` | Preferred Wayland and X11 image exchange format |[m
+[32m+[m[32m| `image/bmp` | X11 image compatibility format |[m
+[32m+[m[32m| `text/plain;charset=utf-8`, `text/plain`, `UTF8_STRING` | Text clipboard formats |[m
+[32m+[m[32m| Deskflow `FileBundle` | Deskflow-internal actual-content bundle; it is not advertised as a system MIME type |[m
+[32m+[m
+[32m+[m[32mWhen both file MIME types are present, Deskflow prefers[m
+[32m+[m[32m`x-special/gnome-copied-files` so that the `copy`/`cut` action is retained.[m
+[32m+[m
+[32m+[m[32m### 4. Building and installing on Ubuntu 24.04[m
+[32m+[m
+[32m+[m[32m#### 4.1 Session support[m
+[32m+[m
+[32m+[m[32m- **Wayland** uses libei and the xdg-desktop-portal Remote Desktop/Input Capture[m
+[32m+[m[32m  clipboard APIs. Accept the desktop Portal permission prompt on first use.[m
+[32m+[m[32m- **X11** uses X selections and Deskflow's X11 MIME converters.[m
+[32m+[m[32m- In the Ubuntu login screen's gear menu, `Ubuntu` normally selects Wayland and[m
+[32m+[m[32m  `Ubuntu on Xorg` selects X11.[m
+[32m+[m
+[32m+[m[32mBoth backends can be compiled into one binary. Do not override `DISPLAY` or[m
+[32m+[m[32m`WAYLAND_DISPLAY`; start Deskflow from the desktop session being tested.[m
+[32m+[m
+[32m+[m[32m#### 4.2 Recommended: Flatpak build[m
+[32m+[m
+[32m+[m[32mSome Qt, libei, or libportal packages in the Ubuntu 24.04 repositories may be[m
+[32m+[m[32molder than this project requires. The project Flatpak manifest pins suitable[m
+[32m+[m[32mdependencies and is therefore the recommended validation path.[m
+[32m+[m
+[32m+[m[32mCurrent minimum dependencies are:[m
+[32m+[m
+[32m+[m[32m- CMake 3.24;[m
+[32m+[m[32m- Qt 6.7;[m
+[32m+[m[32m- libei 1.3;[m
+[32m+[m[32m- libportal 0.9.1;[m
+[32m+[m[32m- OpenSSL 3.0.[m
+[32m+[m
+[32m+[m[32mInstall the build tools and the user-scoped KDE SDK:[m
+[32m+[m
+[32m+[m[32m```bash[m
+[32m+[m[32msudo apt update[m
+[32m+[m[32msudo apt install flatpak flatpak-builder[m
+[32m+[m[32mflatpak remote-add --user --if-not-exists flathub \[m
+[32m+[m[32m  https://dl.flathub.org/repo/flathub.flatpakrepo[m
+[32m+[m[32mflatpak install --user flathub org.kde.Platform//6.10 org.kde.Sdk//6.10[m
+[32m+[m[32m```[m
+[32m+[m
+[32m+[m[32mBuild without installing:[m
+[32m+[m
+[32m+[m[32m```bash[m
+[32m+[m[32mflatpak-builder --force-clean --build-only \[m
+[32m+[m[32m  flatpak-build deploy/linux/flatpak/org.deskflow.deskflow.yml[m
+[32m+[m[32m```[m
+[32m+[m
+[32m+[m[32mInstall a user-scoped test build:[m
+[32m+[m
+[32m+[m[32m```bash[m
+[32m+[m[32mflatpak-builder --force-clean --user --install \[m
+[32m+[m[32m  flatpak-build deploy/linux/flatpak/org.deskflow.deskflow.yml[m
+[32m+[m[32mflatpak run --user org.deskflow.deskflow[m
+[32m+[m[32m```[m
+[32m+[m
+[32m+[m[32mThe `--user` option does not overwrite a system Flatpak. If a system Deskflow[m
+[32m+[m[32mwith the same ID is present, the user build takes precedence for that user.[m
+[32m+[m[32mRemoving the user build reveals the system version again. Do not use `--system`[m
+[32m+[m[32mfor this test.[m
+[32m+[m
+[32m+[m[32mThe source manifest contains `--filesystem=host:ro` so that Deskflow can read[m
+[32m+[m[32mthe actual files copied by Nautilus. This permission is read-only but broad.[m
+[32m+[m[32mInspect the effective permissions with:[m
+[32m+[m
+[32m+[m[32m```bash[m
+[32m+[m[32mflatpak info --user --show-permissions org.deskflow.deskflow[m
+[32m+[m[32m```[m
+[32m+[m
+[32m+[m[32m#### 4.3 Native build[m
+[32m+[m
+[32m+[m[32mUse a native build only when the minimum dependency versions listed above are[m
+[32m+[m[32malready available from the system or a custom prefix. Ubuntu 24.04's default[m
+[32m+[m[32mAPT packages may not satisfy every version requirement.[m
+[32m+[m
+[32m+[m[32mThe following builds the Wayland backend, explicitly retains X11 support, and[m
+[32m+[m[32minstalls into an isolated directory inside the checkout instead of modifying a[m
+[32m+[m[32msystem installation:[m
+[32m+[m
+[32m+[m[32m```bash[m
+[32m+[m[32mcmake -S . -B build-native -G Ninja \[m
+[32m+[m[32m  -DCMAKE_BUILD_TYPE=Release \[m
+[32m+[m[32m  -DCMAKE_INSTALL_PREFIX="$PWD/install-native" \[m
+[32m+[m[32m  -DBUILD_X11_SUPPORT=ON \[m
+[32m+[m[32m  -DBUILD_TESTS=ON[m
+[32m+[m[32mcmake --build build-native --parallel[m
+[32m+[m[32mctest --test-dir build-native --output-on-failure[m
+[32m+[m[32mcmake --install build-native[m
+[32m+[m[32m```[m
+[32m+[m
+[32m+[m[32mRun `install-native/bin/deskflow` for testing. See[m
+[32m+[m[32m[Building Deskflow](dev/build.md) for the general build guide.[m
+[32m+[m
+[32m+[m[32m### 5. Two-computer usage[m
+[32m+[m
+[32m+[m[32m1. Install the same feature-capable Deskflow build on both Ubuntu computers.[m
+[32m+[m[32m2. Configure one as the Deskflow Server and the other as a Client using the[m
+[32m+[m[32m   normal screen layout, network, and authentication workflow.[m
+[32m+[m[32m3. Enable **Enable clipboard sharing** in the Server configuration and set[m
+[32m+[m[32m   **Limit to** high enough for the files being tested.[m
+[32m+[m[32m4. In a Wayland session, accept Deskflow's Portal permission prompt. X11 does[m
+[32m+[m[32m   not require Portal clipboard permission.[m
+[32m+[m[32m5. Test text first: copy UTF-8 text on one computer, switch screens, and paste.[m
+[32m+[m[32m6. Test images: copy from an image application or screenshot tool, switch[m
+[32m+[m[32m   screens, and paste into an image-aware application.[m
+[32m+[m[32m7. In Nautilus, select one or more files or directories and press `Ctrl+C`.[m
+[32m+[m[32m8. Move the pointer to the other computer so it becomes active. Open the target[m
+[32m+[m[32m   directory in Nautilus and press `Ctrl+V`.[m
+[32m+[m[32m9. Compare important content on both machines with `sha256sum`.[m
+[32m+[m
+[32m+[m[32mStart with small test data:[m
+[32m+[m
+[32m+[m[32m```bash[m
+[32m+[m[32mmkdir -p "$HOME/DeskflowClipboardTest/folder"[m
+[32m+[m[32mprintf 'Deskflow UTF-8 test 中文\n' \[m
+[32m+[m[32m  > "$HOME/DeskflowClipboardTest/text.txt"[m
+[32m+[m[32mhead -c 65536 /dev/urandom \[m
+[32m+[m[32m  > "$HOME/DeskflowClipboardTest/folder/random.bin"[m
+[32m+[m[32msha256sum "$HOME/DeskflowClipboardTest/text.txt" \[m
+[32m+[m[32m  "$HOME/DeskflowClipboardTest/folder/random.bin"[m
+[32m+[m[32m```[m
+[32m+[m
+[32m+[m[32m### 6. Size limit[m
+[32m+[m
+[32m+[m[32m- The default maximum clipboard size is **3 MiB**.[m
+[32m+[m[32m- The limit applies to the complete serialized clipboard: text, images, file[m
+[32m+[m[32m  metadata, file contents, and protocol headers, not only to one file.[m
+[32m+[m[32m- All files in a multi-selection or directory share the same limit.[m
+[32m+[m[32m- If the limit is exceeded, a source file is unreadable, or it becomes shorter[m
+[32m+[m[32m  while being read, Deskflow omits the file clipboard and logs a warning. Other[m
+[32m+[m[32m  text or image formats in the same clipboard are retained.[m
+[32m+[m[32m- The complete bundle is held in memory. Network transport uses the existing[m
+[32m+[m[32m  chunked messages, but this is not end-to-end disk streaming.[m
+[32m+[m
+[32m+[m[32mAdjust **Limit to** next to **Enable clipboard sharing** in the Server[m
+[32m+[m[32mconfiguration. A larger limit increases memory, network, and receiver disk use.[m
+[32m+[m
+[32m+[m[32m### 7. Security measures[m
+[32m+[m
+[32m+[m[32m- Only local `file://` URIs explicitly listed by the clipboard are processed.[m
+[32m+[m[32m- Non-local URLs, missing paths, symbolic links, devices, FIFOs, sockets, and[m
+[32m+[m[32m  other special files are rejected.[m
+[32m+[m[32m- The receiver validates the signature, version, action, counts, UTF-8, roots,[m
+[32m+[m[32m  duplicate paths, absolute paths, `.`/`..` traversal, declared lengths,[m
+[32m+[m[32m  truncation, and trailing data.[m
+[32m+[m[32m- Each receive uses a fresh UUID cache directory. `QSaveFile` provides atomic[m
+[32m+[m[32m  file writes, and an incomplete transfer directory is removed on failure.[m
+[32m+[m[32m- A missing or invalid content bundle never causes source-computer paths to be[m
+[32m+[m[32m  advertised in the receiver's clipboard.[m
+[32m+[m[32m- The existing clipboard-size setting also serves as a resource cap.[m
+[32m+[m[32m- The Flatpak build has read-only host access; received files are written to[m
+[32m+[m[32m  the application's own cache.[m
+[32m+[m
+[32m+[m[32mThe bundle does not add a second encryption layer independent of the Deskflow[m
+[32m+[m[32mconnection. Transport security inherits the current Deskflow connection[m
+[32m+[m[32mconfiguration. Connect only trusted computers and enable the authentication and[m
+[32m+[m[32mencryption options provided by the project.[m
+[32m+[m
+[32m+[m[32m### 8. Known limitations[m
+[32m+[m
+[32m+[m[32m- This is an experimental Ubuntu-to-Ubuntu feature. File paste is not guaranteed[m
+[32m+[m[32m  on other desktop environments or operating systems.[m
+[32m+[m[32m- Both endpoints need the new formats. Older peers retain existing text/image[m
+[32m+[m[32m  behavior but cannot receive actual file contents.[m
+[32m+[m[32m- Only local file URIs are supported. Non-local locations such as `smb://`,[m
+[32m+[m[32m  `sftp://`, Google Drive, and GVfs virtual locations are rejected.[m
+[32m+[m[32m- Symbolic links and special files are not transferred.[m
+[32m+[m[32m- Regular-file data, directories, and basic Unix permissions are retained.[m
+[32m+[m[32m  Ownership, ACLs, extended attributes, sparse layout, hard-link relationships,[m
+[32m+[m[32m  and original timestamps are not retained.[m
+[32m+[m[32m- A `cut` marker is preserved on the receiver, but a cross-computer paste does[m
+[32m+[m[32m  not delete the original on the source computer. It behaves more like moving[m
+[32m+[m[32m  the receiver's cache copy into the destination.[m
+[32m+[m[32m- Received cache data is not removed immediately after paste because Nautilus[m
+[32m+[m[32m  may still request it. It consumes disk space; clean it only after Deskflow is[m
+[32m+[m[32m  stopped and the clipboard no longer references the old files.[m
+[32m+[m[32m- The transfer fails if a source file is removed, shortened, or becomes[m
+[32m+[m[32m  unreadable between the copy action and Deskflow's read.[m
+[32m+[m[32m- Wayland support depends on the desktop Portal backend exposing and allowing[m
+[32m+[m[32m  the clipboard APIs.[m
+[32m+[m[32m- Flatpak `host:ro` allows the application to read a broad set of host files.[m
+[32m+[m[32m  Run only trusted builds.[m
+[32m+[m
+[32m+[m[32m### 9. Testing[m
+[32m+[m
+[32m+[m[32mRun all unit tests:[m
+[32m+[m
+[32m+[m[32m```bash[m
+[32m+[m[32mcmake -S . -B build-test -G Ninja \[m
+[32m+[m[32m  -DCMAKE_BUILD_TYPE=Debug \[m
+[32m+[m[32m  -DBUILD_TESTS=ON \[m
+[32m+[m[32m  -DBUILD_X11_SUPPORT=ON[m
+[32m+[m[32mcmake --build build-test --parallel[m
+[32m+[m[32mctest --test-dir build-test --output-on-failure[m
+[32m+[m[32m```[m
+[32m+[m
+[32m+[m[32mRun only the file clipboard tests:[m
+[32m+[m
+[32m+[m[32m```bash[m
+[32m+[m[32mctest --test-dir build-test -R ClipboardFileTransferTests -V[m
+[32m+[m[32m```[m
+[32m+[m
+[32m+[m[32mThese tests cover multiple files, binary contents, recursive directories,[m
+[32m+[m[32mreceiver-local URI rewriting, preservation of other formats, removal of remote[m
+[32m+[m[32mURIs without a content bundle, traversal rejection, the size cap, and[m
+[32m+[m[32mmarshalling of the appended formats.[m
+[32m+[m
+[32m+[m[32mManual testing should cover at least:[m
+[32m+[m
+[32m+[m[32m- Wayland to Wayland;[m
+[32m+[m[32m- X11 to X11;[m
+[32m+[m[32m- Wayland to X11 and X11 to Wayland;[m
+[32m+[m[32m- text, PNG images, one file, multiple files, names containing spaces/non-ASCII[m
+[32m+[m[32m  characters, and nested directories;[m
+[32m+[m[32m- over-limit data, source-file deletion, and old-peer compatibility.[m
+[32m+[m
+[32m+[m[32mInspect clipboard MIME declarations after copying:[m
+[32m+[m
+[32m+[m[32m```bash[m
+[32m+[m[32m# Wayland; requires wl-clipboard[m
+[32m+[m[32mwl-paste --list-types[m
+[32m+[m
+[32m+[m[32m# X11; requires xclip[m
+[32m+[m[32mxclip -selection clipboard -target TARGETS -out[m
+[32m+[m[32m```[m
+[32m+[m
+[32m+[m[32mA file copy should expose at least `text/uri-list` or[m
+[32m+[m[32m`x-special/gnome-copied-files`. Nautilus normally offers both.[m
+[32m+[m
+[32m+[m[32m### 10. Rollback[m
+[32m+[m
+[32m+[m[32mRemove the user-scoped Flatpak test build:[m
+[32m+[m
+[32m+[m[32m```bash[m
+[32m+[m[32mflatpak uninstall --user org.deskflow.deskflow[m
+[32m+[m[32m```[m
+[32m+[m
+[32m+[m[32mIf a system Deskflow Flatpak was already installed, this does not remove it.[m
+[32m+[m[32mLaunch the system version afterward.[m
+[32m+[m
+[32m+[m[32mThe native test build is installed in the checkout's isolated `install-native`[m
+[32m+[m[32mdirectory. Stop that binary and return to the previous Deskflow installation.[m
+[32m+[m[32mDelete the test directory only after confirming that it contains nothing that[m
+[32m+[m[32mmust be retained.[m
+[32m+[m
+[32m+[m[32mTo undo the feature in Git history, prefer an auditable reverse commit:[m
+[32m+[m
+[32m+[m[32m```bash[m
+[32m+[m[32mgit revert <ubuntu-clipboard-feature-commit>[m
+[32m+[m[32m```[m
+[32m+[m
+[32m+[m[32mRebuild and deploy the same reverted version to both computers. Do not directly[m
+[32m+[m[32mreplace binaries inside a system installation.[m

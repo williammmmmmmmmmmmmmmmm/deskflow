@@ -11,6 +11,7 @@
 #include <string_view>
 
 #include <QString>
+#include <QStringList>
 
 class Clipboard;
 class IClipboard;
@@ -26,7 +27,8 @@ public:
 
   //! Copy a received clipboard and replace remote file URIs with local ones.
   static bool prepareForLocalClipboard(
-      Clipboard *destination, const IClipboard *source, const QString &destinationRoot = QString()
+      Clipboard *destination, const IClipboard *source, const QString &destinationRoot = QString(),
+      QStringList *materializedPaths = nullptr, bool exposeFileUris = true
   );
 
   //! Build and extract helpers are public to allow format-level unit testing.

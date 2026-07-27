@@ -153,6 +153,46 @@ private Q_SLOTS:
     local.close();
   }
 
+  void materializesFilesWithoutExposingSandboxUris()
+  {
+    QTemporaryDir sourceDir;
+    QTemporaryDir sandboxCache;
+    QVERIFY(sourceDir.isValid());
+    QVERIFY(sandboxCache.isValid());
+
+    const auto sourcePath = sourceDir.filePath(QStringLiteral("portal payload.txt"));
+    writeFile(sourcePath, QByteArrayLiteral("portal payload"));
+    const auto sourceUris = uriList({sourcePath});
+
+    QString error;
+    const auto bundle =
+        deskflow::ClipboardFileTransfer::buildBundle(sourceUris, {}, 1024 * 1024, &error);
+    QVERIFY2(!bundle.empty(), qPrintable(error));
+
+    Clipboard incoming;
+    QVERIFY(incoming.open(1));
+    QVERIFY(incoming.empty());
+    incoming.add(IClipboard::Format::Text, "text survives");
+    incoming.add(IClipboard::Format::UriList, sourceUris);
+    incoming.add(IClipboard::Format::FileBundle, bundle);
+    incoming.close();
+
+    Clipboard local;
+    QStringList materializedPaths;
+    QVERIFY(deskflow::ClipboardFileTransfer::prepareForLocalClipboard(
+        &local, &incoming, sandboxCache.path(), &materializedPaths, false
+    ));
+    QCOMPARE(materializedPaths.size(), 1);
+    QVERIFY(materializedPaths.front().startsWith(sandboxCache.path()));
+    QCOMPARE(readFile(materializedPaths.front()), QByteArrayLiteral("portal payload"));
+
+    QVERIFY(local.open(0));
+    QCOMPARE(local.get(IClipboard::Format::Text), "text survives");
+    QVERIFY(!local.has(IClipboard::Format::UriList));
+    QVERIFY(!local.has(IClipboard::Format::GnomeCopiedFiles));
+    local.close();
+  }
+
   void rejectsTraversalAndSizeLimit()
   {
     QTemporaryDir source;
