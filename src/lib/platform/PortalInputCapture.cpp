@@ -744,7 +744,11 @@ void PortalInputCapture::handleActivated(
     const char **mimeTypes = xdp_session_get_selection_mime_types(session);
 
     if (mimeTypes && mimeTypes[0]) {
-      LOG_DEBUG("clipboard current selection mime types: %s", PortalClipboard::formatMimeTypes(mimeTypes).constData());
+      LOG_DEBUG(
+          "[clipboard-file-transfer] direction=source event=selection-owner-changed clipboard_session=%p "
+          "mimes=\"%s\"",
+          static_cast<void *>(session), PortalClipboard::formatMimeTypes(mimeTypes).constData()
+      );
       if (!xdp_session_is_selection_owned_by_session(session))
         readClipboardSelection(session);
     } else {

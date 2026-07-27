@@ -6,6 +6,8 @@
 
 #include "platform/PortalFileTransfer.h"
 
+#include "base/Log.h"
+
 #include <algorithm>
 #include <cerrno>
 #include <cstring>
@@ -50,13 +52,35 @@ public:
     GError *error = nullptr;
     m_proxy = g_dbus_proxy_new_for_bus_sync(
         G_BUS_TYPE_SESSION,
-        static_cast<GDBusProxyFlags>(
-            G_DBUS_PROXY_FLAGS_DO_NOT_LOAD_PROPERTIES | G_DBUS_PROXY_FLAGS_DO_NOT_CONNECT_SIGNALS
-        ),
+        G_DBUS_PROXY_FLAGS_DO_NOT_LOAD_PROPERTIES,
         nullptr, kPortalBusName, kPortalObjectPath, kPortalInterface, nullptr, &error
     );
-    if (error)
+    if (error) {
+      LOG_DEBUG(
+          "[clipboard-file-transfer] direction=target event=proxy-created success=false bus=%s object=%s interface=%s "
+          "error=\"%s\"",
+          kPortalBusName, kPortalObjectPath, kPortalInterface, error->message
+      );
       g_error_free(error);
+    } else {
+      LOG_DEBUG(
+          "[clipboard-file-transfer] direction=target event=proxy-created success=true bus=%s object=%s interface=%s",
+          kPortalBusName, kPortalObjectPath, kPortalInterface
+      );
+      g_signal_connect(
+          m_proxy, "g-signal",
+          G_CALLBACK(+[](GDBusProxy *, const gchar *, const gchar *signalName, GVariant *parameters, gpointer) {
+            if (g_strcmp0(signalName, "TransferClosed") != 0)
+              return;
+            g_autofree gchar *values = g_variant_print(parameters, true);
+            LOG_DEBUG(
+                "[clipboard-file-transfer] direction=target event=transfer-closed signal=%s parameters=%s",
+                signalName, values
+            );
+          }),
+          nullptr
+      );
+    }
   }
 
   ~GDbusPortalFileTransferBackend() override
@@ -84,6 +108,11 @@ public:
     );
     if (!reply) {
       setError(error, glibError(callError));
+      LOG_DEBUG(
+          "[clipboard-file-transfer] direction=target event=start-transfer success=false writable=false "
+          "autostop=false error=\"%s\"",
+          callError ? callError->message : "unknown portal error"
+      );
       if (callError)
         g_error_free(callError);
       return {};
@@ -92,6 +121,11 @@ public:
     const char *key = nullptr;
     g_variant_get(reply, "(&s)", &key);
     const auto result = QString::fromUtf8(key);
+    LOG_DEBUG(
+        "[clipboard-file-transfer] direction=target event=start-transfer success=true writable=false "
+        "autostop=false key=\"%s\" key_bytes=%lld",
+        result.toUtf8().constData(), static_cast<long long>(result.toUtf8().size())
+    );
     g_variant_unref(reply);
     return result;
   }
@@ -110,10 +144,21 @@ public:
     g_variant_builder_init(&options, G_VARIANT_TYPE_VARDICT);
 
     for (const auto fd : fileDescriptors) {
+      const auto fdValid = ::fcntl(fd, F_GETFD) >= 0;
+      LOG_DEBUG(
+          "[clipboard-file-transfer] direction=target event=add-files-fd key=\"%s\" fd=%d valid=%s",
+          key.toUtf8().constData(), fd, fdValid ? "true" : "false"
+      );
       GError *appendError = nullptr;
       const auto handle = g_unix_fd_list_append(fdList, fd, &appendError);
       if (handle < 0) {
         setError(error, glibError(appendError));
+        LOG_DEBUG(
+            "[clipboard-file-transfer] direction=target event=add-files success=false key=\"%s\" files=%lld "
+            "error=\"%s\"",
+            key.toUtf8().constData(), static_cast<long long>(fileDescriptors.size()),
+            appendError ? appendError->message : "unknown fd-list error"
+        );
         if (appendError)
           g_error_free(appendError);
         g_object_unref(fdList);
@@ -130,12 +175,22 @@ public:
     g_object_unref(fdList);
     if (!reply) {
       setError(error, glibError(callError));
+      LOG_DEBUG(
+          "[clipboard-file-transfer] direction=target event=add-files success=false key=\"%s\" files=%lld "
+          "error=\"%s\"",
+          key.toUtf8().constData(), static_cast<long long>(fileDescriptors.size()),
+          callError ? callError->message : "unknown portal error"
+      );
       if (callError)
         g_error_free(callError);
       return false;
     }
 
     g_variant_unref(reply);
+    LOG_DEBUG(
+        "[clipboard-file-transfer] direction=target event=add-files success=true key=\"%s\" files=%lld",
+        key.toUtf8().constData(), static_cast<long long>(fileDescriptors.size())
+    );
     return true;
   }
 
@@ -156,6 +211,10 @@ public:
     );
     if (!reply) {
       setError(error, glibError(callError));
+      LOG_DEBUG(
+          "[clipboard-file-transfer] direction=source event=retrieve-files success=false key=\"%s\" error=\"%s\"",
+          key.toUtf8().constData(), callError ? callError->message : "unknown portal error"
+      );
       if (callError)
         g_error_free(callError);
       return {};
@@ -166,6 +225,11 @@ public:
     QStringList result;
     for (auto index = 0; files && files[index]; ++index)
       result.append(QString::fromUtf8(files[index]));
+    LOG_DEBUG(
+        "[clipboard-file-transfer] direction=source event=retrieve-files success=true key=\"%s\" files=%lld "
+        "paths=\"%s\"",
+        key.toUtf8().constData(), static_cast<long long>(result.size()), result.join(u'|').toUtf8().constData()
+    );
     g_strfreev(files);
     g_variant_unref(reply);
     return result;
@@ -183,6 +247,10 @@ public:
     );
     if (reply)
       g_variant_unref(reply);
+    LOG_DEBUG(
+        "[clipboard-file-transfer] direction=target event=stop-transfer-call success=%s key=\"%s\" error=\"%s\"",
+        error ? "false" : "true", key.toUtf8().constData(), error ? error->message : ""
+    );
     if (error)
       g_error_free(error);
   }
@@ -196,17 +264,22 @@ private:
 PortalFileTransfer::PortalFileTransfer(std::unique_ptr<PortalFileTransferBackend> backend)
     : m_backend(backend ? std::move(backend) : std::make_unique<GDbusPortalFileTransferBackend>())
 {
+  LOG_DEBUG("[clipboard-file-transfer] event=session-object-created object=%p", static_cast<void *>(this));
 }
 
 PortalFileTransfer::~PortalFileTransfer()
 {
-  stop();
+  LOG_DEBUG(
+      "[clipboard-file-transfer] event=session-object-destroying object=%p active_key=%s",
+      static_cast<void *>(this), m_key.isEmpty() ? "false" : "true"
+  );
+  stop("destructor");
 }
 
 bool PortalFileTransfer::exportFiles(const QStringList &paths, QString *error)
 {
   std::scoped_lock lock{m_mutex};
-  stopLocked();
+  stopLocked("replace-before-export");
 
   if (paths.isEmpty()) {
     setError(error, QStringLiteral("no local files are available for Portal export"));
@@ -231,9 +304,18 @@ bool PortalFileTransfer::exportFiles(const QStringList &paths, QString *error)
         );
         for (const auto openedFd : fileDescriptors)
           ::close(openedFd);
-        stopLocked();
+        LOG_DEBUG(
+            "[clipboard-file-transfer] direction=target event=open-export-file success=false path=\"%s\" error=\"%s\"",
+            paths.at(index).toUtf8().constData(), std::strerror(errno)
+        );
+        stopLocked("open-export-file-failed");
         return false;
       }
+      LOG_DEBUG(
+          "[clipboard-file-transfer] direction=target event=open-export-file success=true path=\"%s\" fd=%d "
+          "fd_valid=%s",
+          paths.at(index).toUtf8().constData(), fd, ::fcntl(fd, F_GETFD) >= 0 ? "true" : "false"
+      );
       fileDescriptors.append(fd);
     }
 
@@ -241,11 +323,16 @@ bool PortalFileTransfer::exportFiles(const QStringList &paths, QString *error)
     for (const auto fd : fileDescriptors)
       ::close(fd);
     if (!added) {
-      stopLocked();
+      stopLocked("add-files-failed");
       return false;
     }
   }
 
+  LOG_DEBUG(
+      "[clipboard-file-transfer] direction=target event=export-files success=true key=\"%s\" files=%lld "
+      "paths=\"%s\"",
+      m_key.toUtf8().constData(), static_cast<long long>(paths.size()), paths.join(u'|').toUtf8().constData()
+  );
   return true;
 }
 
@@ -265,6 +352,12 @@ QStringList PortalFileTransfer::retrieveFiles(const QByteArray &keyData, QString
     return {};
   }
 
+  LOG_DEBUG(
+      "[clipboard-file-transfer] direction=source event=portal-token-read raw_bytes=%lld trailing_nul=%s key=\"%s\" "
+      "key_bytes=%lld",
+      static_cast<long long>(keyData.size()), keyData.endsWith('\0') ? "true" : "false",
+      key.toUtf8().constData(), static_cast<long long>(normalized.size())
+  );
   std::scoped_lock lock{m_mutex};
   return m_backend->retrieveFiles(key, error);
 }
@@ -272,13 +365,16 @@ QStringList PortalFileTransfer::retrieveFiles(const QByteArray &keyData, QString
 QByteArray PortalFileTransfer::mimeData() const
 {
   std::scoped_lock lock{m_mutex};
-  return m_key.toUtf8();
+  auto data = m_key.toUtf8();
+  if (!data.isEmpty())
+    data.append('\0');
+  return data;
 }
 
-void PortalFileTransfer::stop()
+void PortalFileTransfer::stop(const char *reason)
 {
   std::scoped_lock lock{m_mutex};
-  stopLocked();
+  stopLocked(reason);
 }
 
 bool PortalFileTransfer::isFlatpakSandbox(const QString &markerPath)
@@ -286,10 +382,14 @@ bool PortalFileTransfer::isFlatpakSandbox(const QString &markerPath)
   return QFileInfo::exists(markerPath);
 }
 
-void PortalFileTransfer::stopLocked()
+void PortalFileTransfer::stopLocked(const char *reason)
 {
   if (m_key.isEmpty())
     return;
+  LOG_DEBUG(
+      "[clipboard-file-transfer] direction=target event=stop-transfer-trigger key=\"%s\" reason=%s object=%p",
+      m_key.toUtf8().constData(), reason, static_cast<void *>(this)
+  );
   m_backend->stopTransfer(m_key);
   m_key.clear();
 }

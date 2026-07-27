@@ -198,6 +198,14 @@ QByteArray PortalClipboard::decodeFormat(IClipboard::Format format, const QByteA
 
 QByteArray PortalClipboard::readSelectionBytes(XdpSession *session, const char *mime, qint64 maxBytes)
 {
+  const bool fileTransfer = g_strcmp0(mime, PortalFileTransfer::kMimeType) == 0;
+  if (fileTransfer) {
+    LOG_DEBUG(
+        "[clipboard-file-transfer] direction=source event=selection-read-start mime=%s clipboard_session=%p "
+        "max_bytes=%lld",
+        mime, static_cast<void *>(session), static_cast<long long>(maxBytes)
+    );
+  }
   const int fd = xdp_session_selection_read(session, mime);
   if (fd < 0) {
     LOG_ERR("failed to read clipboard selection: invalid fd");
@@ -223,6 +231,14 @@ QByteArray PortalClipboard::readSelectionBytes(XdpSession *session, const char *
       break;
 
     contents.append(chunk);
+  }
+  if (fileTransfer) {
+    LOG_DEBUG(
+        "[clipboard-file-transfer] direction=source event=selection-read-complete mime=%s success=%s bytes=%lld "
+        "trailing_nul=%s",
+        mime, contents.isEmpty() ? "false" : "true", static_cast<long long>(contents.size()),
+        contents.endsWith('\0') ? "true" : "false"
+    );
   }
   return contents;
 }
@@ -253,7 +269,7 @@ void PortalClipboard::claimOwnership(EiClipboard *cache, XdpSession *session)
     else
       LOG_WARN("failed to export clipboard files through XDG FileTransfer Portal: %s", error.toUtf8().constData());
   } else {
-    cache->portalFileTransfer().stop();
+    cache->portalFileTransfer().stop("claim-without-files");
   }
 
   if (mimeTypes.isEmpty()) {
@@ -262,7 +278,13 @@ void PortalClipboard::claimOwnership(EiClipboard *cache, XdpSession *session)
   }
   mimeTypes.append(nullptr);
 
-  LOG_DEBUG("claiming clipboard, mimes: %s", formatMimeTypes(mimeTypes.data()).constData());
+  LOG_DEBUG(
+      "[clipboard-file-transfer] direction=target event=set-selection clipboard_session=%p "
+      "portal_filetransfer_advertised=%s files=%lld mimes=\"%s\"",
+      static_cast<void *>(session),
+      g_strv_contains(mimeTypes.data(), PortalFileTransfer::kMimeType) ? "true" : "false",
+      static_cast<long long>(localFilePaths.size()), formatMimeTypes(mimeTypes.data()).constData()
+  );
   xdp_session_set_selection(session, mimeTypes.data());
 }
 
@@ -275,6 +297,13 @@ void PortalClipboard::serveSelectionTransfer(EiClipboard *cache, XdpSession *ses
   if ((!requested && !portalFileTransfer) || !cache) {
     LOG_DEBUG("rejecting clipboard selection, unsupported mime: %s", mime);
     xdp_session_selection_write_done(session, serial, false);
+    if (portalFileTransfer) {
+      LOG_DEBUG(
+          "[clipboard-file-transfer] direction=target event=selection-write-done serial=%u success=false "
+          "reason=missing-cache",
+          serial
+      );
+    }
     return;
   }
 
@@ -282,6 +311,14 @@ void PortalClipboard::serveSelectionTransfer(EiClipboard *cache, XdpSession *ses
   QByteArray data;
   if (portalFileTransfer) {
     data = cache->portalFileTransfer().mimeData();
+    auto key = data;
+    while (key.endsWith('\0'))
+      key.chop(1);
+    LOG_DEBUG(
+        "[clipboard-file-transfer] direction=target event=selection-transfer-token serial=%u key=\"%s\" "
+        "bytes=%lld trailing_nul=%s",
+        serial, key.constData(), static_cast<long long>(data.size()), data.endsWith('\0') ? "true" : "false"
+    );
   } else {
     cache->open(0);
     const bool hasFormat = cache->has(requested->format);
@@ -293,6 +330,13 @@ void PortalClipboard::serveSelectionTransfer(EiClipboard *cache, XdpSession *ses
   if (data.isEmpty()) {
     LOG_DEBUG("clipboard has no data for mime: %s", mime);
     xdp_session_selection_write_done(session, serial, false);
+    if (portalFileTransfer) {
+      LOG_DEBUG(
+          "[clipboard-file-transfer] direction=target event=selection-write-done serial=%u success=false "
+          "reason=empty-token",
+          serial
+      );
+    }
     return;
   }
 
@@ -300,6 +344,13 @@ void PortalClipboard::serveSelectionTransfer(EiClipboard *cache, XdpSession *ses
   if (fd < 0) {
     LOG_WARN("failed to open clipboard selection write fd");
     xdp_session_selection_write_done(session, serial, false);
+    if (portalFileTransfer) {
+      LOG_DEBUG(
+          "[clipboard-file-transfer] direction=target event=selection-write-done serial=%u success=false "
+          "reason=invalid-write-fd",
+          serial
+      );
+    }
     return;
   }
 
@@ -308,6 +359,13 @@ void PortalClipboard::serveSelectionTransfer(EiClipboard *cache, XdpSession *ses
     LOG_WARN("failed to wrap clipboard pipe");
     ::close(fd);
     xdp_session_selection_write_done(session, serial, false);
+    if (portalFileTransfer) {
+      LOG_DEBUG(
+          "[clipboard-file-transfer] direction=target event=selection-write-done serial=%u success=false "
+          "reason=wrap-write-fd",
+          serial
+      );
+    }
     return;
   }
 
@@ -319,6 +377,13 @@ void PortalClipboard::serveSelectionTransfer(EiClipboard *cache, XdpSession *ses
     if (poll(&pfd, 1, kWriteTimeoutMs) <= 0) {
       LOG_ERR("timed out writing clipboard selection");
       xdp_session_selection_write_done(session, serial, false);
+      if (portalFileTransfer) {
+        LOG_DEBUG(
+            "[clipboard-file-transfer] direction=target event=selection-write-done serial=%u success=false "
+            "reason=write-timeout written=%lld total=%lld",
+            serial, static_cast<long long>(written), static_cast<long long>(total)
+        );
+      }
       return;
     }
 
@@ -326,12 +391,26 @@ void PortalClipboard::serveSelectionTransfer(EiClipboard *cache, XdpSession *ses
     if (n <= 0) {
       LOG_ERR("clipboard pipe write returned %lld", static_cast<long long>(n));
       xdp_session_selection_write_done(session, serial, false);
+      if (portalFileTransfer) {
+        LOG_DEBUG(
+            "[clipboard-file-transfer] direction=target event=selection-write-done serial=%u success=false "
+            "reason=write-error written=%lld total=%lld",
+            serial, static_cast<long long>(written), static_cast<long long>(total)
+        );
+      }
       return;
     }
     written += n;
   }
 
   xdp_session_selection_write_done(session, serial, true);
+  if (portalFileTransfer) {
+    LOG_DEBUG(
+        "[clipboard-file-transfer] direction=target event=selection-write-done serial=%u success=true "
+        "written=%lld total=%lld",
+        serial, static_cast<long long>(written), static_cast<long long>(total)
+    );
+  }
   LOG_DEBUG("clipboard selection transfer complete, bytes: %lld", static_cast<long long>(written));
 }
 
@@ -341,6 +420,12 @@ bool PortalClipboard::readSelectionIntoCache(
 {
   if (!cache || !session || !mimeTypes || !mimeTypes[0])
     return false;
+
+  LOG_DEBUG(
+      "[clipboard-file-transfer] direction=source event=selection-owner-changed clipboard_session=%p "
+      "mimes=\"%s\"",
+      static_cast<void *>(session), formatMimeTypes(mimeTypes).constData()
+  );
 
   if (!pickSupportedMime(mimeTypes) && !hasMime(mimeTypes, PortalFileTransfer::kMimeType)) {
     LOG_DEBUG("clipboard no supported mime types: %s", formatMimeTypes(mimeTypes).constData());
@@ -359,6 +444,11 @@ bool PortalClipboard::readSelectionIntoCache(
       if (localFilePaths.isEmpty()) {
         LOG_WARN("failed to retrieve clipboard files through XDG FileTransfer Portal: %s", error.toUtf8().constData());
       } else {
+        LOG_DEBUG(
+            "[clipboard-file-transfer] direction=source event=retrieve-files-complete success=true files=%lld "
+            "paths=\"%s\"",
+            static_cast<long long>(localFilePaths.size()), localFilePaths.join(u'|').toUtf8().constData()
+        );
         bool cut = false;
         if (hasMime(mimeTypes, "x-special/gnome-copied-files")) {
           const auto action = readSelectionBytes(session, "x-special/gnome-copied-files", maxBytes);

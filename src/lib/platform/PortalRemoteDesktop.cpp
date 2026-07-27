@@ -248,6 +248,12 @@ void PortalRemoteDesktop::handleSelectionTransfer(XdpSession *session, const cha
 void PortalRemoteDesktop::handleSelectionOwnerChanged(XdpSession *session, char **mimeTypes, gboolean isOwner) const
 {
 #ifdef HAVE_LIBPORTAL_CLIPBOARD
+  LOG_DEBUG(
+      "[clipboard-file-transfer] direction=source event=selection-owner-signal clipboard_session=%p "
+      "is_owner=%s mimes=\"%s\"",
+      static_cast<void *>(session), isOwner ? "true" : "false",
+      PortalClipboard::formatMimeTypes(mimeTypes).constData()
+  );
   if (isOwner) {
     LOG_DEBUG("portal remote desktop selection owner changed, we own it, ignoring");
     return;

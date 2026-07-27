@@ -578,6 +578,13 @@ bool ClipboardFileTransfer::addFileBundle(IClipboard *clipboard, std::uint64_t m
   const auto uriIndex = static_cast<std::size_t>(IClipboard::Format::UriList);
   const auto gnomeIndex = static_cast<std::size_t>(IClipboard::Format::GnomeCopiedFiles);
   const auto bundleIndex = static_cast<std::size_t>(IClipboard::Format::FileBundle);
+  LOG_DEBUG(
+      "[clipboard-file-transfer] direction=source event=content-pack-start uri_list=%s gnome_copied_files=%s "
+      "existing_bundle=%s max_bytes=%llu",
+      snapshot.added[uriIndex] ? "true" : "false", snapshot.added[gnomeIndex] ? "true" : "false",
+      snapshot.added[bundleIndex] ? "true" : "false",
+      static_cast<unsigned long long>(maximumClipboardBytes)
+  );
   if (snapshot.added[bundleIndex] || (!snapshot.added[uriIndex] && !snapshot.added[gnomeIndex]))
     return true;
 
@@ -600,7 +607,14 @@ bool ClipboardFileTransfer::addFileBundle(IClipboard *clipboard, std::uint64_t m
 
   snapshot.added[bundleIndex] = true;
   snapshot.data[bundleIndex] = std::move(bundle);
-  return writeSnapshot(clipboard, snapshot);
+  const auto written = writeSnapshot(clipboard, snapshot);
+  LOG_DEBUG(
+      "[clipboard-file-transfer] direction=source event=content-pack-complete success=%s bundle_bytes=%llu "
+      "error=\"%s\"",
+      written ? "true" : "false",
+      static_cast<unsigned long long>(snapshot.data[bundleIndex].size()), error.toUtf8().constData()
+  );
+  return written;
 }
 
 bool ClipboardFileTransfer::prepareForLocalClipboard(
@@ -640,12 +654,21 @@ bool ClipboardFileTransfer::prepareForLocalClipboard(
     return writeSnapshot(destination, snapshot);
   }
 
+  QStringList extractedPaths;
+  for (const auto &line : mimeLines(localUris)) {
+    const auto url = QUrl::fromEncoded(line.toUtf8());
+    if (url.isLocalFile())
+      extractedPaths.append(url.toLocalFile());
+  }
+  LOG_DEBUG(
+      "[clipboard-file-transfer] direction=target event=content-landed success=true files=%lld "
+      "destination_root=\"%s\" paths=\"%s\" expose_file_uris=%s",
+      static_cast<long long>(extractedPaths.size()), destinationRoot.toUtf8().constData(),
+      extractedPaths.join(u'|').toUtf8().constData(), exposeFileUris ? "true" : "false"
+  );
+
   if (materializedPaths) {
-    for (const auto &line : mimeLines(localUris)) {
-      const auto url = QUrl::fromEncoded(line.toUtf8());
-      if (url.isLocalFile())
-        materializedPaths->append(url.toLocalFile());
-    }
+    *materializedPaths = extractedPaths;
   }
 
   snapshot.added[uriIndex] = exposeFileUris;

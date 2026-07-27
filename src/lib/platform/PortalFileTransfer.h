@@ -42,12 +42,12 @@ public:
   bool exportFiles(const QStringList &paths, QString *error = nullptr);
   QStringList retrieveFiles(const QByteArray &keyData, QString *error = nullptr);
   QByteArray mimeData() const;
-  void stop();
+  void stop(const char *reason = "explicit");
 
   static bool isFlatpakSandbox(const QString &markerPath = QStringLiteral("/.flatpak-info"));
 
 private:
-  void stopLocked();
+  void stopLocked(const char *reason);
 
   std::unique_ptr<PortalFileTransferBackend> m_backend;
   QString m_key;

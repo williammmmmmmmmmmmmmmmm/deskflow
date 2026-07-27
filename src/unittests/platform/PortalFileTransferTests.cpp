@@ -6,6 +6,8 @@
 
 #include "platform/PortalFileTransfer.h"
 
+#include "base/Log.h"
+
 #include <fcntl.h>
 
 #include <QFile>
@@ -64,6 +66,8 @@ class PortalFileTransferTests : public QObject
   Q_OBJECT
 
 private:
+  Log m_log;
+
   static void writeFile(const QString &path)
   {
     QFile file(path);
@@ -106,8 +110,9 @@ private Q_SLOTS:
     QCOMPARE(fake->batches.at(1).size(), 1);
     QVERIFY(fake->validDescriptors);
     QCOMPARE(fake->addedKeys, QList<QString>({fake->key, fake->key}));
-    QCOMPARE(transfer.mimeData(), fake->key.toUtf8());
+    QCOMPARE(transfer.mimeData(), fake->key.toUtf8() + '\0');
     QVERIFY(!transfer.mimeData().contains(dir.path().toUtf8()));
+    QVERIFY(fake->stoppedKeys.isEmpty());
 
     transfer.stop();
     QCOMPARE(fake->stoppedKeys, QStringList({fake->key}));

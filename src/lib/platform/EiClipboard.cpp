@@ -32,7 +32,7 @@ bool EiClipboard::empty()
     m_added[index] = false;
   }
   m_localFilePaths.clear();
-  m_portalFileTransfer.stop();
+  m_portalFileTransfer.stop("clipboard-empty");
 
   // Save time
   m_timeOwned = m_time;
